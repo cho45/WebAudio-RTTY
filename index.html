@@ -81,21 +81,30 @@
 			</div>
 
 			<div class="container">
-				<div style="width: 256px">
-					<canvas id="fft" width="256" height="100"></canvas>
-					<canvas id="waterfall" width="256" height="50"></canvas>
-				</div>
-				<canvas id="canvas" width="1024" height="200"></canvas>
 				<div>
-					<textarea id="text" class="form-control" style="width: 100%" cols="80" rows="5" readonly></textarea>
+					<div style="width: 256px; float: left; line-height: 0;">
+						<canvas id="fft" width="256" height="75"></canvas><canvas id="waterfall" width="256" height="75"></canvas>
+					</div>
+					<div style="margin-left: 256px;">
+						<canvas id="canvas" width="1024" height="150" style=""></canvas>
+						<script>
+							$(window).resize(function () {
+								var canvas = $('#canvas');
+								canvas.attr('width', canvas.parent().width());
+							}).resize();
+						</script>
+					</div>
+				</div>
+				<div>
+					<textarea id="text" class="form-control" style="width: 100%" cols="80" rows="15" readonly></textarea>
 				</div>
 			</div>
 		</div>
 
-		<div id="footer">
+		<!-- div id="footer" >
 			<div class="container">
 			</div>
-		</div>
+		</div -->
 
 
 

@@ -297,6 +297,7 @@ var RTTY = {
 		self.retainAudioNode(source);
 
 		self.analyser = self.context.createAnalyser();
+		self.analyser.fftSize = 2048;
 		self.analyser.maxDecibels = -10;
 		self.analyser.minDecibels = -100;
 		source.connect(self.analyser);
@@ -455,7 +456,7 @@ var RTTY = {
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
 
 		ctx.beginPath();
-		ctx.moveTo(0, 0);
+		ctx.moveTo(0, canvas.height/2);
 		ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
 		buffer = self.drawBuffers.mark;
 		for (var i = 0, len = buffer.length; i < len; i++) {
@@ -468,7 +469,7 @@ var RTTY = {
 		ctx.stroke();
 
 		ctx.beginPath();
-		ctx.moveTo(0, 0);
+		ctx.moveTo(0, canvas.height/2);
 		ctx.strokeStyle = "rgba(0, 0, 255, 0.8)";
 		buffer = self.drawBuffers.space;
 		for (var i = 0, len = buffer.length; i < len; i++) {
@@ -481,7 +482,7 @@ var RTTY = {
 		ctx.stroke();
 
 		ctx.beginPath();
-		ctx.moveTo(0, 0);
+		ctx.moveTo(0, canvas.height/2);
 		ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
 		buffer = self.drawBuffers.bits;
 		for (var i = 0, len = buffer.length; i < len; i++) {
