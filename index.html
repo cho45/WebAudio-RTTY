@@ -16,12 +16,107 @@
 		<!--[if lt IE 9]>
 		<script src="http://html5shiv.googlecode.com/svn/trunk/html5.js"></script>
 		<![endif]-->
+		<style>
+			body {
+				background: #eee;
+				  padding-top: 70px;
+			}
+
+			html,
+			body {
+				height: 100%;
+			}
+
+			#wrap {
+				min-height: 100%;
+				height: auto;
+				margin: 0 auto -60px;
+				padding: 0 0 60px;
+			}
+
+			#footer {
+				height: 60px;
+				background-color: #f5f5f5;
+			}
+
+		</style>
 	</head>
 	<body>
-		<div>
-			<textarea id="text" style="width: 100%"></textarea>
+		<div id="wrap">
+			<!-- Fixed navbar -->
+			<div class="navbar navbar-default navbar-fixed-top" role="navigation">
+				<div class="container">
+					<div class="navbar-header">
+						<button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+							<span class="sr-only">Toggle navigation</span>
+							<span class="icon-bar"></span>
+							<span class="icon-bar"></span>
+							<span class="icon-bar"></span>
+						</button>
+						<a class="navbar-brand" href="#">Project name</a>
+					</div>
+					<div class="navbar-collapse collapse">
+						<ul class="nav navbar-nav">
+							<li><a href="#" data-toggle="modal" data-target="#send-modal">Send</a></li>
+							<li class="dropdown">
+								<a href="#" class="dropdown-toggle" data-toggle="dropdown">Setting <b class="caret"></b></a>
+								<ul class="dropdown-menu">
+									<li><a href="#">Action</a></li>
+									<li><a href="#">Another action</a></li>
+									<li><a href="#">Something else here</a></li>
+									<li class="divider"></li>
+									<li class="dropdown-header">Nav header</li>
+									<li><a href="#">Separated link</a></li>
+									<li><a href="#">One more separated link</a></li>
+								</ul>
+							</li>
+						</ul>
+						<ul class="nav navbar-nav navbar-right">
+							<li><a href="../navbar/">Default</a></li>
+							<li><a href="../navbar-static-top/">Static top</a></li>
+							<li class="active"><a href="./">Fixed top</a></li>
+						</ul>
+					</div><!--/.nav-collapse -->
+				</div>
+			</div>
+
+			<div class="container">
+				<div style="width: 256px">
+					<canvas id="fft" width="256" height="100"></canvas>
+					<canvas id="waterfall" width="256" height="50"></canvas>
+				</div>
+				<canvas id="canvas" width="1024" height="200"></canvas>
+				<div>
+					<textarea id="text" class="form-control" style="width: 100%" cols="80" rows="5" readonly></textarea>
+				</div>
+			</div>
 		</div>
-		<canvas id="canvas" width="1024" height="256"></canvas>
+
+		<div id="footer">
+			<div class="container">
+			</div>
+		</div>
+
+
+
+		<div class="modal fade" id="send-modal">
+			<div class="modal-dialog">
+				<div class="modal-content">
+					<div class="modal-header">
+						<button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
+						<h4 class="modal-title">Send</h4>
+					</div>
+					<div class="modal-body">
+						<textarea id="send-text" rows="5" cols="80" class="form-control"></textarea>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+						<button type="button" class="btn btn-primary">Send</button>
+					</div>
+				</div><!-- /.modal-content -->
+			</div><!-- /.modal-dialog -->
+		</div><!-- /.modal -->
+
 		<script src="rtty.js"></script>
 	</body>
 </html>

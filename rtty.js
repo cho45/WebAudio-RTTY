@@ -24,6 +24,7 @@ RingBuffer.prototype = {
 	},
 
 	get : function (i) {
+		if (i < 0) i += this.length;
 		return this.buffer[(this.readIndex + i) % this.maxLength];
 	},
 
@@ -70,6 +71,7 @@ RingBuffer.Fast.prototype = {
 	},
 
 	get : function (i) {
+		if (i < 0) i += this.length;
 		return this.buffer[(this.readIndex + i) & this.mask];
 	},
 
@@ -99,6 +101,53 @@ RingBuffer.Fast.prototype = {
 			this.length = maxLength;
 			this.readIndex = (this.readIndex + over) & mask;
 		}
+	}
+};
+
+RingBuffer.Typed2D = function () { this.init.apply(this, arguments) };
+RingBuffer.Typed2D.prototype = {
+	init : function (type, unit, length) {
+		this.buffer = new type(unit * length);
+		this.readIndex = 0;
+		this.writeIndex = 0;
+		this.unit = unit;
+		this.length = 0;
+		this.maxLength = length;
+	},
+
+	get : function (i) {
+		if (i < 0) i += this.length;
+		var begin = ((this.readIndex + i) % this.maxLength) * this.unit;
+		return this.buffer.subarray(begin, begin + this.unit );
+	},
+
+	put : function (v) {
+		var buffer = this.buffer;
+		var maxLength = this.maxLength;
+		var writeIndex = this.writeIndex;
+		var unit = this.unit;
+
+		for (var i = 0, len = arguments.length; i < len; i++) {
+			buffer.set(arguments[i], writeIndex * unit);
+			writeIndex = (writeIndex + 1) % maxLength;
+		}
+		this.writeIndex = writeIndex;
+
+		this.length += len;
+		var over = this.length - maxLength;
+		if (over > 0) {
+			this.length = maxLength;
+			this.readIndex = (this.readIndex + over) % maxLength;
+		}
+	},
+
+	nextSubarray : function () {
+		if (this.length < this.maxLength) {
+			this.length++;
+		} else {
+			this.readIndex = (this.readIndex + 1) % this.maxLength;
+		}
+		return this.get(this.length);
 	}
 };
 
@@ -178,8 +227,385 @@ var RTTY = {
 	init : function () {
 		var self = this;
 		self.context = new AudioContext();
+
+		self.DOWNSAMPLE_FACTOR = 64;
+		self.audioNodes = [];
+
+		self.drawBuffers = {
+			bits : new RingBuffer(new Int8Array(Math.pow(2, 11))),
+			mark : new RingBuffer(new Float32Array(Math.pow(2, 11))),
+			space : new RingBuffer(new Float32Array(Math.pow(2, 11)))
+		};
+
+		self.waveFormCanvas = document.getElementById('canvas');
+		self.waveFormContext = self.waveFormCanvas.getContext('2d');
+
+		// FFT 結果の4分の1 = 44100 / 2 / 4 = 5512.5Hz までを50個格納
+		self.fftResults = new RingBuffer.Typed2D(Uint8Array, 1024 / 4, 50);
+		self.waterfallCanvas = document.getElementById('waterfall');
+		self.waterfallContext = self.waterfallCanvas.getContext('2d');
+
+		self.fftCanvas = document.getElementById('fft');
+		self.fftContext = self.fftCanvas.getContext('2d');
+
+		self.freqMark = 2125;
+		self.freqSpace = 2125 + 170;
+
+		self.output = document.getElementById('text');
+
+		self.bindEvents();
 	},
 
+	bindEvents : function () {
+		var self = this;
+		setInterval(function () {
+			self.drawWaveForm();
+		}, 50);
+		setInterval(function () {
+			if (self.analyser) {
+				self.analyser.getByteFrequencyData(self.fftResults.nextSubarray());
+				self.drawWaterFall();
+				self.drawFFT();
+			}
+		}, 50);
+	},
+
+	retainAudioNode : function (node) {
+		var self = this;
+		self.audioNodes.push(node);
+		return node;
+	},
+
+	playAFSK : function (text, opts) {
+		var self = this;
+
+		var source = self.context.createBufferSource();
+		source.buffer = RTTY.createAFSKBuffer(text, opts);
+
+		var bandpass = self.context.createBiquadFilter();
+		bandpass.type = 2;
+		bandpass.frequency.value = self.freqMark;
+		bandpass.Q.value = 5;
+
+		source.connect(bandpass);
+		bandpass.connect(self.context.destination);
+		source.start(0);
+	},
+
+	decode : function (source) {
+		var self = this;
+		self.retainAudioNode(source);
+
+		self.analyser = self.context.createAnalyser();
+		self.analyser.maxDecibels = -10;
+		self.analyser.minDecibels = -100;
+		source.connect(self.analyser);
+
+		var detection = self._detectCoherent(self.analyser);
+
+		var unit  = Math.round(self.context.sampleRate / self.DOWNSAMPLE_FACTOR / 45.45);
+		var current = {
+			state : "waiting",
+			total : 0,
+			mark  : 0,
+			space : 0,
+			bit   : 0,
+			byte  : 0,
+			data  : 0,
+			set   : RTTY.BAUDOT_CODE.LTRS
+		};
+		var states = {
+			"waiting": function () {
+				if (current.data === -1) {
+					current.state = "start";
+				} else {
+					current.total = 0;
+				}
+			},
+			"start": function () {
+				if (unit <= current.total) {
+					// console.log('start bit');
+					current.total = 0;
+					current.state = "data";
+				}
+			},
+			"data": function () {
+				if (current.data ===  1) current.mark++;
+				if (current.data === -1) current.space++;
+				if (unit <= current.total) {
+					// console.log(current);
+					var bit = current.mark > current.space ? 1 : 0;
+					current.mark = 0; current.space = 0;
+					current.byte = current.byte | (bit<<current.bit++);
+					current.total = 0;
+
+					if (current.bit >= 5) {
+						current.bit = 0;
+						current.state = "stop";
+					}
+				}
+			},
+			"stop": function () {
+				if (unit <= current.total) {
+					// console.log('stop bit');
+					var char = current.set[current.byte];
+					if (char === "\x0f") {
+						current.set = RTTY.BAUDOT_CODE.FIGS;
+					} else
+					if (char === "\x0e") {
+						current.set = RTTY.BAUDOT_CODE.LTRS;
+					} else
+					if (char === "\r") {
+						// skip
+					} else {
+						// console.log(current.byte.toString(2), current.byte, char);
+						self.output.value += char;
+						self.output.scrollTop = self.output.scrollHeight;
+					}
+					current.byte = 0;
+					current.state = "waiting";
+					current.total = 0;
+				}
+			}
+		};
+
+		var decoder = self.retainAudioNode(self.context.createScriptProcessor(4096, 2, 1));
+		decoder.onaudioprocess = function (e) {
+			var inputMark  = e.inputBuffer.getChannelData(0);
+			var inputSpace = e.inputBuffer.getChannelData(1);
+			for (var i = 0, len = e.inputBuffer.length; i < len; i += self.DOWNSAMPLE_FACTOR) { // down sample
+				if (inputMark[i] > inputSpace[i]) {
+					current.data = inputMark[i] > 0.02 ? 1 : 0;
+				} else {
+					current.data = inputSpace[i] > 0.02 ? -1 : 0;
+				}
+				self.drawBuffers.bits.put(current.data);
+				self.drawBuffers.mark.put(inputMark[i]);
+				self.drawBuffers.space.put(inputSpace[i]);
+
+				states[current.state]();
+				current.total++;
+			}
+		};
+		detection.connect(decoder);
+
+		var outputGain = self.retainAudioNode(self.context.createGain());
+		outputGain.gain.value = 0;
+		decoder.connect(outputGain);
+		outputGain.connect(self.context.destination);
+	},
+
+	_detectCoherent : function (source) {
+		var self = this;
+
+		var toneMark  = self.context.sampleRate / (2 * Math.PI * self.freqMark);
+		var toneSpace = self.context.sampleRate / (2 * Math.PI * self.freqSpace);
+
+		var n = 0;
+		var iq = self.retainAudioNode(self.context.createScriptProcessor(4096, 1, 4));
+		iq.onaudioprocess = function (e) {
+			var data = e.inputBuffer.getChannelData(0);
+			var outputMarkI  = e.outputBuffer.getChannelData(0);
+			var outputMarkQ  = e.outputBuffer.getChannelData(1);
+			var outputSpaceI = e.outputBuffer.getChannelData(2);
+			var outputSpaceQ = e.outputBuffer.getChannelData(3);
+			for (var i = 0, len = e.inputBuffer.length; i < len; i++) {
+				outputMarkI[i]  = (Math.sin(n / toneMark)  > 0 ? 1 : -1) * data[i];
+				outputMarkQ[i]  = (Math.cos(n / toneMark)  > 0 ? 1 : -1) * data[i];
+				outputSpaceI[i] = (Math.sin(n / toneSpace) > 0 ? 1 : -1) * data[i];
+				outputSpaceQ[i] = (Math.cos(n / toneSpace) > 0 ? 1 : -1) * data[i];
+				n++;
+			}
+		};
+		source.connect(iq);
+
+		var filter = self.retainAudioNode(self.context.createBiquadFilter());
+		filter.type = 0; // low pass
+		filter.frequency.value = 100;
+		filter.Q.value = 0;
+		iq.connect(filter);
+
+		var detection = self.retainAudioNode(self.context.createScriptProcessor(4096, 4, 2));
+		detection.onaudioprocess = function (e) {
+			var inputMarkI  = e.inputBuffer.getChannelData(0);
+			var inputMarkQ  = e.inputBuffer.getChannelData(1);
+			var inputSpaceI = e.inputBuffer.getChannelData(2);
+			var inputSpaceQ = e.inputBuffer.getChannelData(3);
+
+			var outputMark  = e.outputBuffer.getChannelData(0);
+			var outputSpace = e.outputBuffer.getChannelData(1);
+			for (var i = 0, len = e.inputBuffer.length; i < len; i += self.DOWNSAMPLE_FACTOR) { // down sample
+				outputMark[i]  = Math.sqrt(inputMarkI[i]  * inputMarkI[i]  + inputMarkQ[i]  * inputMarkQ[i]);
+				outputSpace[i] = Math.sqrt(inputSpaceI[i] * inputSpaceI[i] + inputSpaceQ[i] * inputSpaceQ[i]);
+			}
+		};
+		filter.connect(detection);
+
+		return detection;
+	},
+
+	drawWaveForm : function () {
+		var self = this;
+
+		var canvas = self.waveFormCanvas;
+		var ctx = self.waveFormContext;
+
+		var buffer, n;
+
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+		ctx.beginPath();
+		ctx.moveTo(0, 0);
+		ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
+		buffer = self.drawBuffers.mark;
+		for (var i = 0, len = buffer.length; i < len; i++) {
+			n = buffer.get(i);
+			ctx.lineTo(
+				canvas.width * (i / len),
+				canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
+			);
+		}
+		ctx.stroke();
+
+		ctx.beginPath();
+		ctx.moveTo(0, 0);
+		ctx.strokeStyle = "rgba(0, 0, 255, 0.8)";
+		buffer = self.drawBuffers.space;
+		for (var i = 0, len = buffer.length; i < len; i++) {
+			n = buffer.get(i);
+			ctx.lineTo(
+				canvas.width * (i / len),
+				canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
+			);
+		}
+		ctx.stroke();
+
+		ctx.beginPath();
+		ctx.moveTo(0, 0);
+		ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+		buffer = self.drawBuffers.bits;
+		for (var i = 0, len = buffer.length; i < len; i++) {
+			n = buffer.get(i);
+			ctx.lineTo(
+				canvas.width * (i / len),
+				canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
+			);
+		}
+		ctx.stroke();
+	},
+
+	drawWaterFall : function () {
+		var self = this;
+		var canvas = self.waterfallCanvas;
+		var ctx = self.waterfallContext;
+
+		var bandwidth = self.context.sampleRate / 2 / self.analyser.frequencyBinCount;
+		var mark  = Math.round(self.freqMark / bandwidth);
+		var space = Math.round(self.freqSpace / bandwidth);
+		var center = Math.round(space < mark ? space + (mark - space) / 2 : mark + (space - mark) / 2);
+
+		var viewBandwidth = 2000;
+		var size  = Math.ceil(viewBandwidth / bandwidth);
+		var start = Math.round(center - (size / 2));
+		var end   = start + size;
+
+		var w = canvas.width, h = canvas.height;
+		var imageData = ctx.createImageData(w, h);
+		var data      = imageData.data;
+		for (var i = 0, len = self.fftResults.length; i < len; i++) {
+			var result = self.fftResults.get(i);
+			for (var j = 0; j < size; j++) {
+//				var dB = 20 * Math.log(result[j]) * Math.LOG10E;
+//				var p = (dB / 48.13);
+				var p = result[start+j] / 255;
+
+				var r = 0, g = 0, b = 0, a = 255;
+				if (j === mark || j === space) {
+					r = g = b = 255;
+				} else  {
+					if (p > 4/5) {
+						// yellow -> red
+						p = (p - (4/5)) / (1/5);
+						r = 255;
+						g = 255 * (1 - p);
+						b = 0;
+					} else
+					if (p > 3/5) {
+						// green -> yellow
+						p = (p - (3/5)) / (1/5);
+						r = 255 * p;
+						g = 255;
+						b = 0;
+					} else
+					if (p > 2/5) {
+						// light blue -> green
+						p = (p - (2/5)) / (1/5);
+						r = 0;
+						g = 255;
+						b = 255 * (1 - p);
+					} else
+					if (p > 1/5) {
+						// blue -> light blue
+						p = (p - (1/5)) / (1/5);
+						r = 0;
+						g = 255 * p;
+						b = 255;
+					} else
+					if (p > 0) {
+						// black -> blue
+						p = p / (1/5);
+						r = 0;
+						g = 0;
+						b = 255 * p;
+					}
+				}
+
+				var y = i, x = j;
+				data[y * w * 4 + x * 4 + 0] = r;
+				data[y * w * 4 + x * 4 + 1] = g;
+				data[y * w * 4 + x * 4 + 2] = b;
+				data[y * w * 4 + x * 4 + 3] = a;
+			}
+		}
+		ctx.putImageData(imageData, 0, 0);
+		ctx.imageSmoothingEnabled = false;
+		ctx.drawImage(
+			canvas,
+			0, 0, size, self.fftResults.maxLength,
+			0, 0, canvas.width, canvas.height
+		);
+	},
+
+	drawFFT : function () {
+		var self = this;
+		var canvas = self.fftCanvas;
+		var ctx = self.fftContext;
+
+		var bandwidth = self.context.sampleRate / 2 / self.analyser.frequencyBinCount;
+		var mark  = Math.round(self.freqMark / bandwidth);
+		var space = Math.round(self.freqSpace / bandwidth);
+		var center = Math.round(space < mark ? space + (mark - space) / 2 : mark + (space - mark) / 2);
+
+		var viewBandwidth = 2000;
+		var size  = Math.ceil(viewBandwidth / bandwidth);
+		var start = Math.round(center - (size / 2));
+		var end   = start + size;
+
+		var w = canvas.width, h = canvas.height;
+		ctx.clearRect(0, 0, w, h);
+
+		var u = w / size;
+
+		var result = self.fftResults.get(-1);
+		ctx.beginPath();
+		ctx.moveTo(0, h);
+		for (var i = 0; i < size; i++) {
+			ctx.lineTo(i * u, h - ((result[start+i] / 255) * h) );
+		}
+		ctx.stroke();
+	},
+
+	// self.context 以外に依存しない
 	createAFSKBuffer : function (text, opts) {
 		var self = this;
 		if (!opts) opts = {};
@@ -241,229 +667,34 @@ var RTTY = {
 		sendBit(1, wait);
 
 		return buffer;
-	},
-
-	playAFSK : function (text, opts) {
-		var self = this;
-
-		var source = self.context.createBufferSource();
-		source.buffer = RTTY.createAFSKBuffer(text, opts);
-
-		var bandpass = self.context.createBiquadFilter();
-		bandpass.type = 2;
-		bandpass.frequency.value = 2125;
-		bandpass.Q.value = 5;
-
-		source.connect(bandpass);
-		bandpass.connect(self.context.destination);
-		source.start(0);
-	},
-
-	decode : function (source) {
-		var self = this;
-		var toneMark = self.context.sampleRate / (2 * Math.PI * 2125);
-		var toneSpace = self.context.sampleRate / (2 * Math.PI * (2125 + 170));
-
-		var n = 0;
-		var iq = self.context.createScriptProcessor(4096, 1, 4);
-		iq.onaudioprocess = function (e) {
-			var data = e.inputBuffer.getChannelData(0);
-			var outputMarkI = e.outputBuffer.getChannelData(0);
-			var outputMarkQ = e.outputBuffer.getChannelData(1);
-			var outputSpaceI = e.outputBuffer.getChannelData(2);
-			var outputSpaceQ = e.outputBuffer.getChannelData(3);
-			for (var i = 0, len = e.inputBuffer.length; i < len; i++) {
-				outputMarkI[i]  = (Math.sin(n / toneMark) > 0 ? 1 : -1) * data[i];
-				outputMarkQ[i]  = (Math.cos(n / toneMark) > 0 ? 1 : -1) * data[i];
-				outputSpaceI[i] = (Math.sin(n / toneSpace) > 0 ? 1 : -1) * data[i];
-				outputSpaceQ[i] = (Math.cos(n / toneSpace) > 0 ? 1 : -1) * data[i];
-				n++;
-			}
-		};
-		source.connect(iq);
-		console.log(iq);
-
-		var filter = self.context.createBiquadFilter();
-		filter.type = 0; // low pass
-		filter.frequency.value = 100;
-		filter.Q.value = 0;
-		iq.connect(filter);
-
-		// var outputBuffer = new RingBuffer(new Int8Array(Math.pow(2, 11)));
-		var outputBuffer = new RingBuffer.Fast(new Float32Array(Math.pow(2, 11)));
-		var DOWNSAMPLE_FACTOR = 64;
-		var unit  = Math.round(self.context.sampleRate / DOWNSAMPLE_FACTOR / 45.45);
-		var current = {
-			state : "waiting",
-			total : 0,
-			mark : 0,
-			space: 0,
-			bit  : 0,
-			byte : 0,
-			set  : RTTY.BAUDOT_CODE.LTRS
-		};
-
-		var detection = self.context.createScriptProcessor(4096, 4, 2);
-		detection.onaudioprocess = function (e) {
-			var inputMarkI  = e.inputBuffer.getChannelData(0);
-			var inputMarkQ  = e.inputBuffer.getChannelData(1);
-			var inputSpaceI = e.inputBuffer.getChannelData(2);
-			var inputSpaceQ = e.inputBuffer.getChannelData(3);
-
-			var outputMark  = e.outputBuffer.getChannelData(0);
-			var outputSpace = e.outputBuffer.getChannelData(1);
-			for (var i = 0, len = e.inputBuffer.length; i < len; i += DOWNSAMPLE_FACTOR) { // down sample
-				outputMark[i]  = Math.sqrt(inputMarkI[i]  * inputMarkI[i]  + inputMarkQ[i]  * inputMarkQ[i]);
-				outputSpace[i] = Math.sqrt(inputSpaceI[i] * inputSpaceI[i] + inputSpaceQ[i] * inputSpaceQ[i]);
-				var data;
-				if (outputMark[i] > outputSpace[i]) {
-					data = outputMark[i] > 0.05 ? 1 : 0;
-				} else {
-					data = outputSpace[i] > 0.05 ? -1 : 0;
-				}
-				outputBuffer.put(data);
-
-				switch (current.state) {
-					case "waiting":
-						if (data === -1) {
-							current.state = "start";
-						} else {
-							current.total = 0;
-						}
-						break;
-					case "start":
-						if (unit <= current.total) {
-							console.log('start bit');
-							current.total = 0;
-							current.state = "data";
-						}
-						break;
-					case "data":
-						if (data ===  1) current.mark++;
-						if (data === -1) current.space++;
-						if (unit <= current.total) {
-							console.log(current);
-							var bit = current.mark > current.space ? 1 : 0;
-							current.mark = 0; current.space = 0;
-							current.byte = current.byte | (bit<<current.bit++);
-							current.total = 0;
-
-							if (current.bit >= 5) {
-								current.bit = 0;
-								current.state = "stop";
-							}
-						}
-						break;
-					case "stop":
-						if (unit <= current.total) {
-							console.log('stop bit');
-							var char = current.set[current.byte];
-							if (char === "\x0f") {
-								current.set = RTTY.BAUDOT_CODE.FIGS;
-							} else
-							if (char === "\x0e") {
-								current.set = RTTY.BAUDOT_CODE.LTRS;
-							} else {
-								console.log(current.byte.toString(2), current.byte, char);
-								document.getElementById('text').value += char;
-							}
-							current.byte = 0;
-							current.state = "waiting";
-							current.total = 0;
-						}
-						break;
-				}
-
-				current.total++;
-			}
-		};
-		filter.connect(detection);
-
-		var outputGain = self.context.createGain();
-		outputGain.gain.value = 0;
-		detection.connect(outputGain);
-		outputGain.connect(self.context.destination);
-
-		console.log(detection);
-
-		var canvas = document.getElementById('canvas');
-		var ctx = canvas.getContext('2d');
-		setInterval(function () {
-			ctx.clearRect(0, 0, canvas.width, canvas.height);
-			ctx.beginPath();
-			ctx.moveTo(0, 0);
-			for (var i = 0, len = outputBuffer.length; i < len; i++) {
-				var n = outputBuffer.get(i);
-				ctx.lineTo(
-					canvas.width * (i / len),
-					canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
-				);
-			}
-			ctx.stroke();
-		}, 500);
-
-//		analysis(detection);
-//
-//		function analysis (node) {
-//			var analyser = self.context.createAnalyser();
-//			var data = new Uint8Array(analyser.frequencyBinCount);
-//			var canvas = document.getElementById('canvas');
-//			var ctx = canvas.getContext('2d');
-//			setInterval(function () {
-//				analyser.getByteTimeDomainData(data);
-//				ctx.clearRect(0, 0, canvas.width, canvas.height);
-//				ctx.beginPath();
-//				ctx.moveTo(0, 0);
-//				for (var i = 0, len = data.length; i < len; i++) {
-//					ctx.lineTo(canvas.width * (i / len), canvas.height - (data[i] / 0xff * canvas.height));
-//				}
-//				ctx.stroke();
-//			}, 50);
-//			node.connect(analyser);
-//			var outputGain = self.context.createGain();
-//			outputGain.gain.value = 0;
-//			outputGain.connect(self.context.destination);
-//			analyser.connect(outputGain);
-//		}
 	}
 };
 
 
 RTTY.init();
-RTTY.decode(
-		function () {
-			var source = RTTY.context.createBufferSource();
-			source.buffer = RTTY.createAFSKBuffer('RY RY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K', {
-//			source.buffer = RTTY.createAFSKBuffer('JH1UMV PSE K', {
-				reverse : true,
-				tone : 2125,
-				shift : 170,
-				baudrate: 45.45
-			});
-			source.connect(RTTY.context.destination);
-			source.start(1);
-			return source;
-		} ()
-);
+//RTTY.decode(
+//		function () {
+//			var source = RTTY.context.createBufferSource();
+//			source.buffer = RTTY.createAFSKBuffer('RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K', {
+////			source.buffer = RTTY.createAFSKBuffer('JH1UMV PSE K', {
+//				reverse : true,
+//				tone : 2125,
+//				shift : 170,
+//				baudrate: 45.45
+//			});
+//			// source.connect(RTTY.context.destination);
+//			source.start(1);
+//			return source;
+//		} ()
+//);
 
-//navigator.getMedia({ video: false, audio: true }, function (stream) {
-//	var source = RTTY.context.createMediaStreamSource(stream);
-//	RTTY.decode(source);
-//}, function (e) {
-//	alert(e);
-//});
+navigator.getMedia({ video: false, audio: true }, function (stream) {
+	var source = RTTY.context.createMediaStreamSource(stream);
+	RTTY.decode(source);
+}, function (e) {
+	alert(e);
+});
 
-//var source = RTTY.context.createBufferSource();
-//source.buffer = RTTY.createAFSKBuffer("RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K", {
-//	reverse : true,
-//	tone : 2125,
-//	shift : 170,
-//	baudrate: 45.45
-//});
-//
-//RTTY.decode(source);
-//source.start(0);
-//
 document.body.onclick = function () {
 	RTTY.playAFSK("RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K", {
 		reverse : true,
@@ -472,4 +703,3 @@ document.body.onclick = function () {
 		baudrate: 45.45
 	});
 };
-//RTTY.playAFSK("Hello World!");
