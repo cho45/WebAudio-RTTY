@@ -452,15 +452,33 @@ var RTTY = {
 		var ctx = self.waveFormContext;
 
 		var buffer, n;
+		var max = Math.max(
+			Math.max.apply(Math, self.drawBuffers.mark.buffer),
+			Math.max.apply(Math, self.drawBuffers.space.buffer),
+			0.001
+		);
 
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+		ctx.beginPath();
+		ctx.moveTo(0, canvas.height/2);
+		ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+		buffer = self.drawBuffers.bits;
+		for (var i = 0, len = buffer.length; i < len; i++) {
+			n = buffer.get(i);
+			ctx.lineTo(
+				canvas.width * (i / len),
+				canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
+			);
+		}
+		ctx.stroke();
 
 		ctx.beginPath();
 		ctx.moveTo(0, canvas.height/2);
 		ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
 		buffer = self.drawBuffers.mark;
 		for (var i = 0, len = buffer.length; i < len; i++) {
-			n = buffer.get(i);
+			n = buffer.get(i) / max;
 			ctx.lineTo(
 				canvas.width * (i / len),
 				canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
@@ -473,20 +491,7 @@ var RTTY = {
 		ctx.strokeStyle = "rgba(0, 0, 255, 0.8)";
 		buffer = self.drawBuffers.space;
 		for (var i = 0, len = buffer.length; i < len; i++) {
-			n = buffer.get(i);
-			ctx.lineTo(
-				canvas.width * (i / len),
-				canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
-			);
-		}
-		ctx.stroke();
-
-		ctx.beginPath();
-		ctx.moveTo(0, canvas.height/2);
-		ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
-		buffer = self.drawBuffers.bits;
-		for (var i = 0, len = buffer.length; i < len; i++) {
-			n = buffer.get(i);
+			n = buffer.get(i) / max;
 			ctx.lineTo(
 				canvas.width * (i / len),
 				canvas.height - (n * 0.5 * canvas.height + canvas.height / 2)
