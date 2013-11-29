@@ -141,13 +141,19 @@ RingBuffer.Typed2D.prototype = {
 		}
 	},
 
+	/**
+	 * returns subarray of buffer for writing
+	 */
 	nextSubarray : function () {
+		var begin = this.writeIndex * this.unit;
+		var ret = this.buffer.subarray(begin, begin + this.unit);
 		if (this.length < this.maxLength) {
 			this.length++;
 		} else {
 			this.readIndex = (this.readIndex + 1) % this.maxLength;
 		}
-		return this.get(this.length);
+		this.writeIndex = (this.writeIndex + 1) % this.maxLength;
+		return ret;
 	}
 };
 
@@ -258,9 +264,11 @@ var RTTY = {
 
 	bindEvents : function () {
 		var self = this;
+
 		setInterval(function () {
 			self.drawWaveForm();
 		}, 50);
+
 		setInterval(function () {
 			if (self.analyser) {
 				self.analyser.getByteFrequencyData(self.fftResults.nextSubarray());
@@ -268,6 +276,23 @@ var RTTY = {
 				self.drawFFT();
 			}
 		}, 50);
+
+		$('#send-form').submit(function () {
+			try {
+				var input = $(this).find('[name=text]');
+				var text = input.val();
+				input.val('');
+				$('#send-modal').modal('hide');
+				self.playAFSK(text, {
+					reverse : self.freqSpace > self.freqMark,
+					tone : self.freqMark,
+					shift : self.freqSpace - self.freqMark,
+					baudrate: 45.45
+				});
+			} catch (e) { alert(e) }
+			
+			return false;
+		});
 	},
 
 	retainAudioNode : function (node) {
@@ -462,7 +487,7 @@ var RTTY = {
 
 		ctx.beginPath();
 		ctx.moveTo(0, canvas.height/2);
-		ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+		ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
 		buffer = self.drawBuffers.bits;
 		for (var i = 0, len = buffer.length; i < len; i++) {
 			n = buffer.get(i);
@@ -475,7 +500,7 @@ var RTTY = {
 
 		ctx.beginPath();
 		ctx.moveTo(0, canvas.height/2);
-		ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
+		ctx.strokeStyle = "#3276b1";
 		buffer = self.drawBuffers.mark;
 		for (var i = 0, len = buffer.length; i < len; i++) {
 			n = buffer.get(i) / max;
@@ -488,7 +513,7 @@ var RTTY = {
 
 		ctx.beginPath();
 		ctx.moveTo(0, canvas.height/2);
-		ctx.strokeStyle = "rgba(0, 0, 255, 0.8)";
+		ctx.strokeStyle = "#47a447";
 		buffer = self.drawBuffers.space;
 		for (var i = 0, len = buffer.length; i < len; i++) {
 			n = buffer.get(i) / max;
@@ -678,21 +703,24 @@ var RTTY = {
 
 
 RTTY.init();
-//RTTY.decode(
-//		function () {
-//			var source = RTTY.context.createBufferSource();
-//			source.buffer = RTTY.createAFSKBuffer('RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K', {
-////			source.buffer = RTTY.createAFSKBuffer('JH1UMV PSE K', {
-//				reverse : true,
-//				tone : 2125,
-//				shift : 170,
-//				baudrate: 45.45
-//			});
-//			// source.connect(RTTY.context.destination);
-//			source.start(1);
-//			return source;
-//		} ()
-//);
+
+if (location.hash === '#debug') {
+	RTTY.decode(
+			function () {
+				var source = RTTY.context.createBufferSource();
+				source.buffer = RTTY.createAFSKBuffer('RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K', {
+	//			source.buffer = RTTY.createAFSKBuffer('JH1UMV PSE K', {
+					reverse : true,
+					tone : 2125,
+					shift : 170,
+					baudrate: 45.45
+				});
+				// source.connect(RTTY.context.destination);
+				source.start(1);
+				return source;
+			} ()
+	);
+}
 
 navigator.getMedia({ video: false, audio: true }, function (stream) {
 	var source = RTTY.context.createMediaStreamSource(stream);
@@ -701,11 +729,11 @@ navigator.getMedia({ video: false, audio: true }, function (stream) {
 	alert(e);
 });
 
-document.body.onclick = function () {
-	RTTY.playAFSK("RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K", {
+function playTest () {
+	RTTY.playAFSK("RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K\r\n", {
 		reverse : true,
 		tone : 2125,
 		shift : 170,
 		baudrate: 45.45
 	});
-};
+}
