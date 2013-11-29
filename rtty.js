@@ -550,52 +550,17 @@ var RTTY = {
 //				var p = (dB / 48.13);
 				var p = result[start+j] / 255;
 
-				var r = 0, g = 0, b = 0, a = 255;
-				if (j === mark || j === space) {
-					r = g = b = 255;
-				} else  {
-					if (p > 4/5) {
-						// yellow -> red
-						p = (p - (4/5)) / (1/5);
-						r = 255;
-						g = 255 * (1 - p);
-						b = 0;
-					} else
-					if (p > 3/5) {
-						// green -> yellow
-						p = (p - (3/5)) / (1/5);
-						r = 255 * p;
-						g = 255;
-						b = 0;
-					} else
-					if (p > 2/5) {
-						// light blue -> green
-						p = (p - (2/5)) / (1/5);
-						r = 0;
-						g = 255;
-						b = 255 * (1 - p);
-					} else
-					if (p > 1/5) {
-						// blue -> light blue
-						p = (p - (1/5)) / (1/5);
-						r = 0;
-						g = 255 * p;
-						b = 255;
-					} else
-					if (p > 0) {
-						// black -> blue
-						p = p / (1/5);
-						r = 0;
-						g = 0;
-						b = 255 * p;
-					}
-				}
+				var r = 238, g = 238, b = 238;
+				// 47a447
+				r = r - (r - 0x47) * p;
+				g = g - (g - 0xa4) * p;
+				b = b - (b - 0x47) * p;
 
 				var y = i, x = j;
 				data[y * w * 4 + x * 4 + 0] = r;
 				data[y * w * 4 + x * 4 + 1] = g;
 				data[y * w * 4 + x * 4 + 2] = b;
-				data[y * w * 4 + x * 4 + 3] = a;
+				data[y * w * 4 + x * 4 + 3] = 255;
 			}
 		}
 		ctx.putImageData(imageData, 0, 0);
@@ -628,6 +593,7 @@ var RTTY = {
 		var u = w / size;
 
 		var result = self.fftResults.get(-1);
+		ctx.strokeStyle = "#333";
 		ctx.beginPath();
 		ctx.moveTo(0, h);
 		for (var i = 0; i < size; i++) {
