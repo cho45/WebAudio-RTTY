@@ -552,9 +552,9 @@ var RTTY = {
 
 				var r = 238, g = 238, b = 238;
 				// 47a447
-				r = r - (r - 0x47) * p;
-				g = g - (g - 0xa4) * p;
-				b = b - (b - 0x47) * p;
+				r = r - (r - 0x33) * p;
+				g = g - (g - 0x33) * p;
+				b = b - (b - 0x33) * p;
 
 				var y = i, x = j;
 				data[y * w * 4 + x * 4 + 0] = r;
