@@ -629,10 +629,23 @@ var RTTY = {
 
 		var result = self.fftResults.get(-1);
 		ctx.beginPath();
+		ctx.strokeStyle = '#000000';
 		ctx.moveTo(0, h);
 		for (var i = 0; i < size; i++) {
 			ctx.lineTo(i * u, h - ((result[start+i] / 255) * h) );
 		}
+		ctx.stroke();
+
+		ctx.beginPath();
+		ctx.strokeStyle = '#990000';
+		ctx.moveTo((space - start) * u, 0);
+		ctx.lineTo((space - start) * u, h);
+		ctx.stroke();
+
+		ctx.beginPath();
+		ctx.strokeStyle = '#990000';
+		ctx.moveTo((mark - start) * u, 0);
+		ctx.lineTo((mark - start) * u, h);
 		ctx.stroke();
 	},
 
