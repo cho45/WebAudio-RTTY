@@ -234,7 +234,7 @@ var RTTY = {
 		var self = this;
 		self.context = new AudioContext();
 
-		self.DOWNSAMPLE_FACTOR = 64;
+		self.DOWNSAMPLE_FACTOR = 8;
 		self.audioNodes = [];
 
 		self.drawBuffers = {
@@ -256,6 +256,7 @@ var RTTY = {
 
 		self.freqMark = 2125;
 		self.freqSpace = 2125 + 170;
+		self.baudrate  = 45.45;
 
 		self.output = document.getElementById('text');
 
@@ -287,7 +288,7 @@ var RTTY = {
 					reverse : self.freqSpace > self.freqMark,
 					tone : self.freqMark,
 					shift : self.freqSpace - self.freqMark,
-					baudrate: 45.45
+					baudrate: self.baudrate
 				});
 			} catch (e) { alert(e) }
 			
@@ -329,7 +330,7 @@ var RTTY = {
 
 		var detection = self._detectCoherent(self.analyser);
 
-		var unit  = Math.round(self.context.sampleRate / self.DOWNSAMPLE_FACTOR / 45.45);
+		var unit  = Math.round(self.context.sampleRate / self.DOWNSAMPLE_FACTOR / self.baudrate);
 		var current = {
 			state : "waiting",
 			total : 0,
@@ -400,11 +401,18 @@ var RTTY = {
 			var inputMark  = e.inputBuffer.getChannelData(0);
 			var inputSpace = e.inputBuffer.getChannelData(1);
 			for (var i = 0, len = e.inputBuffer.length; i < len; i += self.DOWNSAMPLE_FACTOR) { // down sample
-				if (inputMark[i] > inputSpace[i]) {
-					current.data = inputMark[i] > 0.02 ? 1 : 0;
+				if (current.state == 'waiting') {
+					if (inputMark[i] < inputSpace[i]) {
+						current.data = inputSpace[i] > 0.01 ? -1 : 0;
+					}
 				} else {
-					current.data = inputSpace[i] > 0.02 ? -1 : 0;
+					if (inputMark[i] > inputSpace[i]) {
+						current.data = 1;
+					} else {
+						current.data = -1;
+					}
 				}
+
 				self.drawBuffers.bits.put(current.data);
 				self.drawBuffers.mark.put(inputMark[i]);
 				self.drawBuffers.space.put(inputSpace[i]);
@@ -445,11 +453,18 @@ var RTTY = {
 		};
 		source.connect(iq);
 
-		var filter = self.retainAudioNode(self.context.createBiquadFilter());
-		filter.type = 0; // low pass
-		filter.frequency.value = 100;
-		filter.Q.value = 0;
-		iq.connect(filter);
+		var splitter = self.retainAudioNode(self.context.createChannelSplitter(4));
+		iq.connect(splitter);
+		var merger   = self.retainAudioNode(self.context.createChannelMerger(4));
+
+		for (var i = 0; i < 4; i++) {
+			var filter = self.retainAudioNode(self.context.createBiquadFilter());
+			filter.type = 0; // low pass
+			filter.frequency.value = self.baudrate / 2;
+			filter.Q.value = 0;
+			splitter.connect(filter, i, 0);
+			filter.connect(merger, 0, i);
+		}
 
 		var detection = self.retainAudioNode(self.context.createScriptProcessor(4096, 4, 2));
 		detection.onaudioprocess = function (e) {
@@ -465,7 +480,7 @@ var RTTY = {
 				outputSpace[i] = Math.sqrt(inputSpaceI[i] * inputSpaceI[i] + inputSpaceQ[i] * inputSpaceQ[i]);
 			}
 		};
-		filter.connect(detection);
+		merger.connect(detection);
 
 		return detection;
 	},
@@ -658,8 +673,9 @@ var RTTY = {
 		if (!opts.baudrate) opts.baudrate = 45.45;
 		if (!opts.reverse) opts.reverse = false;
 
-		var markTone  = self.context.sampleRate / (2 * Math.PI * opts.tone);
-		var spaceTone = self.context.sampleRate / (2 * Math.PI * (opts.tone - (opts.reverse ? -opts.shift : opts.shift) ));
+		var markFreq  = opts.tone;
+		var spaceFreq = opts.tone - (opts.reverse ? -opts.shift : opts.shift);
+
 		var unit      = self.context.sampleRate / opts.baudrate;
 		var wait      = 30;
 
@@ -671,11 +687,16 @@ var RTTY = {
 		var data      = buffer.getChannelData(0);
 		var position  = 0;
 
+		var phase = 0;
+		var markToneDelta = 2 * Math.PI * markFreq / self.context.sampleRate;  
+		var spaceToneDelta = 2 * Math.PI * spaceFreq / self.context.sampleRate;  
+
 		function sendBit (bit, length) {
-			var tone = bit ? markTone : spaceTone;
+			var tone = bit ? markToneDelta : spaceToneDelta;
 			var len = length * unit;
 			for (var i = 0; i < len; i++) {
-				data[position++] = Math.sin(position / tone);
+				phase += tone;
+				data[position++] = Math.sin(phase);
 			}
 		}
 
@@ -718,17 +739,30 @@ var RTTY = {
 RTTY.init();
 
 if (location.hash === '#debug') {
+//	// V.21 (L)
+//	RTTY.freqMark = 980;
+//	RTTY.freqSpace = RTTY.freqMark + 200;
+//	RTTY.baudrate = 300;
+	// V.21 (H)
+//	RTTY.freqMark = 1650;
+//	RTTY.freqSpace = RTTY.freqMark + 200;
+//	RTTY.baudrate = 300;
+
 	RTTY.decode(
 			function () {
 				var source = RTTY.context.createBufferSource();
 				source.buffer = RTTY.createAFSKBuffer('RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K', {
 	//			source.buffer = RTTY.createAFSKBuffer('JH1UMV PSE K', {
 					reverse : true,
-					tone : 2125,
-					shift : 170,
-					baudrate: 45.45
+					tone : RTTY.freqMark,
+					shift : RTTY.freqSpace - RTTY.freqMark,
+					baudrate: RTTY.baudrate
 				});
-				// source.connect(RTTY.context.destination);
+				var gain = RTTY.context.createGain();
+				gain.gain.value = 0.3;
+
+				source.connect(gain);
+				gain.connect(RTTY.context.destination);
 				source.start(1);
 				return source;
 			} ()
@@ -741,12 +775,3 @@ navigator.getMedia({ video: false, audio: true }, function (stream) {
 }, function (e) {
 	alert(e);
 });
-
-function playTest () {
-	RTTY.playAFSK("RYRY CQ CQ CQ DE JH1UMV JH1UMV JH1UMV PSE K\r\n", {
-		reverse : true,
-		tone : 2125,
-		shift : 170,
-		baudrate: 45.45
-	});
-}
